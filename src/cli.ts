@@ -4,6 +4,19 @@ import { mkdir, exists } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import readline from "readline";
+import {
+  GOAL_DIRECTORIES,
+  GOALS_AGENT_TEMPLATE,
+  goalAdd,
+  goalShow,
+  goalList,
+  goalComplete,
+  goalPause,
+  goalResume,
+  goalAbandon,
+  goalUpdate,
+  goalHistory,
+} from "./goals";
 
 // ─────────────────────────────────────────────────────────────
 // Configuration
@@ -147,15 +160,28 @@ async function initVault(vaultPath?: string) {
   await mkdir(path, { recursive: true });
   await mkdir(join(path, "stream"), { recursive: true });
 
+  // Create goals directory structure
+  const goalsPath = join(path, "goals");
+  await mkdir(goalsPath, { recursive: true });
+  for (const dir of GOAL_DIRECTORIES) {
+    await mkdir(join(goalsPath, dir), { recursive: true });
+  }
+
   // Write agent.md files
   await Bun.write(agentPath, ROOT_AGENT_TEMPLATE);
   await Bun.write(join(path, "stream", "agent.md"), STREAM_AGENT_TEMPLATE);
+  await Bun.write(join(goalsPath, "agent.md"), GOALS_AGENT_TEMPLATE);
 
   const displayPath = path.replace(homedir(), "~");
   console.log(`✓ Created ${displayPath}/`);
   console.log(`✓ Created ${displayPath}/agent.md`);
   console.log(`✓ Created ${displayPath}/stream/`);
   console.log(`✓ Created ${displayPath}/stream/agent.md`);
+  console.log(`✓ Created ${displayPath}/goals/`);
+  console.log(`✓ Created ${displayPath}/goals/agent.md`);
+  for (const dir of GOAL_DIRECTORIES) {
+    console.log(`✓ Created ${displayPath}/goals/${dir}/`);
+  }
   console.log("\n🎉 Vault initialized! Edit agent.md to tell AI who you are.\n");
   console.log(`Run 'life checkin' to capture your first check-in.\n`);
 }
@@ -248,10 +274,24 @@ Usage:
   life status           Show vault status
   life help             Show this help
 
+Goal Commands:
+  life goal add                Create a new goal interactively
+  life goal list               List all active goals
+  life goal show <id>          Show details of a specific goal
+  life goal complete <id>      Mark a goal as completed
+  life goal pause <id>         Pause an active goal
+  life goal resume <id>        Resume a paused goal
+  life goal abandon <id>       Abandon an active or paused goal
+  life goal update <id>        Update a goal (creates version archive)
+  life goal history <id>       Show version history for a goal
+
 Examples:
   life init                    # Create vault at ~/life
   life init ~/my-vault         # Create vault at custom path
   life checkin                 # Record what's on your mind
+  life goal add                # Create a new goal
+  life goal list               # See all active goals
+  life goal show abc123        # View goal details
 `;
 
 switch (command) {
@@ -266,6 +306,48 @@ switch (command) {
   case "s":
     await showStatus(args[0]);
     break;
+  case "goal":
+  case "g": {
+    const [subcommand, ...subargs] = args;
+    switch (subcommand) {
+      case "add":
+      case "a":
+        await goalAdd();
+        break;
+      case "list":
+      case "ls":
+      case "l":
+        await goalList();
+        break;
+      case "show":
+        await goalShow(subargs[0]);
+        break;
+      case "complete":
+      case "done":
+        await goalComplete(subargs[0]);
+        break;
+      case "pause":
+        await goalPause(subargs[0]);
+        break;
+      case "resume":
+        await goalResume(subargs[0]);
+        break;
+      case "abandon":
+        await goalAbandon(subargs[0]);
+        break;
+      case "update":
+        await goalUpdate(subargs[0]);
+        break;
+      case "history":
+        await goalHistory(subargs[0]);
+        break;
+      default:
+        console.log(`Unknown goal subcommand: ${subcommand}`);
+        console.log("\nAvailable: add, list, show, complete, pause, resume, abandon, update, history");
+        process.exit(1);
+    }
+    break;
+  }
   case "help":
   case "--help":
   case "-h":
