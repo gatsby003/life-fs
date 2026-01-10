@@ -1,0 +1,20 @@
+{
+  "name": "life-fs",
+  "version": "0.1.0",
+  "description": "Your life as a filesystem — for AI agents",
+  "module": "src/cli.ts",
+  "type": "module",
+  "bin": {
+    "life": "src/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/cli.ts",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
