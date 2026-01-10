@@ -5,6 +5,7 @@ import { join } from "path";
 import { homedir } from "os";
 import readline from "readline";
 import { askAgent } from "./agents/ask";
+import { checkinAgent, analysisAgent, saveCheckin, getDatePath, formatCheckinContent } from "./agents/checkin";
 
 // ─────────────────────────────────────────────────────────────
 // Configuration
@@ -47,6 +48,45 @@ This directory contains check-ins — raw, unfiltered captures of thoughts, feel
 `;
 
 // ─────────────────────────────────────────────────────────────
+// Spinner
+// ─────────────────────────────────────────────────────────────
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+class Spinner {
+  private frameIndex = 0;
+  private intervalId: ReturnType<typeof setInterval> | null = null;
+  private message: string;
+
+  constructor(message = "Thinking") {
+    this.message = message;
+  }
+
+  start() {
+    this.frameIndex = 0;
+    process.stdout.write(`\r${SPINNER_FRAMES[0]} ${this.message}...`);
+    this.intervalId = setInterval(() => {
+      this.frameIndex = (this.frameIndex + 1) % SPINNER_FRAMES.length;
+      process.stdout.write(`\r${SPINNER_FRAMES[this.frameIndex]} ${this.message}...`);
+    }, 80);
+  }
+
+  stop(clearLine = true) {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+    if (clearLine) {
+      process.stdout.write("\r" + " ".repeat(this.message.length + 10) + "\r");
+    }
+  }
+
+  setMessage(message: string) {
+    this.message = message;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Utilities
 // ─────────────────────────────────────────────────────────────
 
@@ -73,6 +113,9 @@ function multiLinePrompt(question: string): Promise<string> {
   console.log(question);
   console.log("(Press Enter twice to finish)\n");
 
+  // Show initial prompt
+  process.stdout.write("> ");
+
   return new Promise((resolve) => {
     const lines: string[] = [];
     let emptyLineCount = 0;
@@ -80,48 +123,23 @@ function multiLinePrompt(question: string): Promise<string> {
     rl.on("line", (line) => {
       if (line === "") {
         emptyLineCount++;
-        if (emptyLineCount >= 1 && lines.length > 0) {
+        if (emptyLineCount >= 2) {
           rl.close();
           resolve(lines.join("\n"));
           return;
         }
       } else {
         emptyLineCount = 0;
+        lines.push(line);
       }
-      lines.push(line);
+      // Show prompt for next line
+      process.stdout.write("> ");
     });
 
     rl.on("close", () => {
       resolve(lines.join("\n"));
     });
   });
-}
-
-function getDatePath(): { year: string; month: string; filename: string } {
-  const now = new Date();
-  const year = now.getFullYear().toString();
-  const month = (now.getMonth() + 1).toString().padStart(2, "0");
-  const day = now.getDate().toString().padStart(2, "0");
-  const hours = now.getHours().toString().padStart(2, "0");
-  const minutes = now.getMinutes().toString().padStart(2, "0");
-
-  return {
-    year,
-    month,
-    filename: `${day}-${hours}${minutes}.md`,
-  };
-}
-
-function formatCheckinContent(content: string): string {
-  const now = new Date();
-  const isoDate = now.toISOString();
-
-  return `---
-date: ${isoDate}
----
-
-${content}
-`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -161,7 +179,26 @@ async function initVault(vaultPath?: string) {
   console.log(`Run 'life checkin' to capture your first check-in.\n`);
 }
 
-async function checkin(vaultPath?: string) {
+async function checkin(args: string[]) {
+  // Parse arguments
+  let vaultPath: string | undefined;
+  let quickMode = false;
+  let verbose = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--vault" && args[i + 1]) {
+      vaultPath = args[i + 1];
+      i++;
+    } else if (arg === "--quick" || arg === "-q") {
+      quickMode = true;
+    } else if (arg === "--verbose" || arg === "-v") {
+      verbose = true;
+    } else if (arg && !arg.startsWith("-")) {
+      vaultPath = arg;
+    }
+  }
+
   const path = vaultPath || DEFAULT_VAULT_PATH;
 
   // Check if vault exists
@@ -177,19 +214,66 @@ async function checkin(vaultPath?: string) {
     return;
   }
 
-  // Create date-based path
-  const { year, month, filename } = getDatePath();
-  const streamDir = join(path, "stream", year, month);
+  // Quick mode: just save without interactive agent
+  if (quickMode) {
+    const filePath = await saveCheckin(path, content);
+    const relativePath = filePath.replace(homedir(), "~");
+    console.log(`\n✓ Saved to ${relativePath}\n`);
+    return;
+  }
 
-  await mkdir(streamDir, { recursive: true });
+  // Interactive mode: use the check-in agent
+  console.log("\n🤔 Let me help you explore that a bit more...\n");
 
-  const filePath = join(streamDir, filename);
-  const formattedContent = formatCheckinContent(content);
+  const result = await checkinAgent({
+    initialThoughts: content,
+    vaultPath: path,
+    verbose,
+  });
 
-  await Bun.write(filePath, formattedContent);
+  if (result.success && result.finalContent) {
+    // Get date path for consistent naming
+    const { year, month, filename } = getDatePath();
+    const streamDir = join(path, "stream", year, month);
+    await mkdir(streamDir, { recursive: true });
 
-  const relativePath = filePath.replace(homedir(), "~");
-  console.log(`\n✓ Saved to ${relativePath}\n`);
+    // Save raw content first
+    const rawFilename = filename.replace(".md", "-raw.md");
+    const rawFilePath = join(streamDir, rawFilename);
+    await Bun.write(rawFilePath, formatCheckinContent(result.finalContent));
+    const rawRelativePath = rawFilePath.replace(homedir(), "~");
+    console.log(`\n✓ Raw saved to ${rawRelativePath}`);
+
+    // Run analysis agent
+    const spinner = new Spinner("Analyzing");
+    spinner.start();
+
+    const analysisResult = await analysisAgent({
+      vaultPath: path,
+      rawContent: result.finalContent,
+      verbose,
+    });
+
+    spinner.stop();
+
+    if (analysisResult.success && analysisResult.cleanedContent) {
+      // Save analysis output
+      const analysisFilePath = join(streamDir, filename);
+      await Bun.write(analysisFilePath, formatCheckinContent(analysisResult.cleanedContent));
+      const analysisRelativePath = analysisFilePath.replace(homedir(), "~");
+      console.log(`✓ Analysis saved to ${analysisRelativePath}\n`);
+    } else {
+      console.log(`⚠️  Analysis failed: ${analysisResult.error}`);
+      console.log(`   Raw content still saved at ${rawRelativePath}\n`);
+    }
+  } else {
+    console.log(`\n⚠️  ${result.error}\n`);
+    // Fall back to saving the original content
+    console.log("Saving original entry...");
+    const filePath = await saveCheckin(path, content);
+    const relativePath = filePath.replace(homedir(), "~");
+    console.log(`\n✓ Saved to ${relativePath}\n`);
+  }
 }
 
 async function showStatus(vaultPath?: string) {
@@ -241,17 +325,18 @@ async function handleAsk(args: string[]) {
   let verbose = false;
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--vault" && args[i + 1]) {
+    const arg = args[i];
+    if (arg === "--vault" && args[i + 1]) {
       vaultPath = args[i + 1];
       i++;
-    } else if (args[i] === "--verbose" || args[i] === "-v") {
+    } else if (arg === "--verbose" || arg === "-v") {
       verbose = true;
-    } else if (!args[i].startsWith("-")) {
+    } else if (arg && !arg.startsWith("-")) {
       // Collect all non-flag arguments as the question
       if (question) {
-        question += " " + args[i];
+        question += " " + arg;
       } else {
-        question = args[i];
+        question = arg;
       }
     }
   }
@@ -264,7 +349,12 @@ async function handleAsk(args: string[]) {
 
   console.log(`\n🔍 Searching vault for: "${question}"\n`);
 
+  const spinner = new Spinner("Thinking");
+  spinner.start();
+
   const result = await askAgent({ question, vaultPath, verbose });
+
+  spinner.stop();
 
   if (result.success) {
     console.log("─".repeat(60));
@@ -286,10 +376,15 @@ life-fs — Your life as a filesystem
 
 Usage:
   life init [path]      Initialize a new vault (default: ~/life)
-  life checkin          Capture a check-in
+  life checkin          Capture a check-in (interactive)
   life status           Show vault status
   life ask <question>   Ask a question about your vault
   life help             Show this help
+
+Options for checkin:
+  --quick, -q           Skip interactive mode, just save
+  --vault <path>        Path to vault (default: ~/life)
+  --verbose, -v         Show detailed agent output
 
 Options for ask:
   --vault <path>        Path to vault (default: ~/life)
@@ -298,7 +393,8 @@ Options for ask:
 Examples:
   life init                    # Create vault at ~/life
   life init ~/my-vault         # Create vault at custom path
-  life checkin                 # Record what's on your mind
+  life checkin                 # Interactive check-in with follow-up questions
+  life checkin --quick         # Quick check-in, no follow-ups
   life ask "What have I been focused on lately?"
   life ask "What patterns do you see?" --verbose
 `;
@@ -309,7 +405,7 @@ switch (command) {
     break;
   case "checkin":
   case "c":
-    await checkin(args[0]);
+    await checkin(args);
     break;
   case "status":
   case "s":

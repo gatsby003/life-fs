@@ -6,6 +6,41 @@ import { homedir } from "os";
 import { exists } from "fs/promises";
 
 // ─────────────────────────────────────────────────────────────
+// Spinner
+// ─────────────────────────────────────────────────────────────
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+class Spinner {
+  private frameIndex = 0;
+  private intervalId: ReturnType<typeof setInterval> | null = null;
+  private message: string;
+
+  constructor(message = "Thinking") {
+    this.message = message;
+  }
+
+  start() {
+    this.frameIndex = 0;
+    process.stdout.write(`\r${SPINNER_FRAMES[0]} ${this.message}...`);
+    this.intervalId = setInterval(() => {
+      this.frameIndex = (this.frameIndex + 1) % SPINNER_FRAMES.length;
+      process.stdout.write(`\r${SPINNER_FRAMES[this.frameIndex]} ${this.message}...`);
+    }, 80);
+  }
+
+  stop(clearLine = true) {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+    if (clearLine) {
+      process.stdout.write("\r" + " ".repeat(this.message.length + 10) + "\r");
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Configuration
 // ─────────────────────────────────────────────────────────────
 
@@ -206,13 +241,14 @@ Examples:
   let verbose = false;
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--vault" && args[i + 1]) {
+    const arg = args[i];
+    if (arg === "--vault" && args[i + 1]) {
       vaultPath = args[i + 1];
       i++;
-    } else if (args[i] === "--verbose" || args[i] === "-v") {
+    } else if (arg === "--verbose" || arg === "-v") {
       verbose = true;
-    } else if (!args[i].startsWith("-")) {
-      question = args[i];
+    } else if (arg && !arg.startsWith("-")) {
+      question = arg;
     }
   }
 
@@ -223,7 +259,12 @@ Examples:
 
   console.log(`\nSearching vault for: "${question}"\n`);
 
+  const spinner = new Spinner("Thinking");
+  spinner.start();
+
   const result = await askAgent({ question, vaultPath, verbose });
+
+  spinner.stop();
 
   if (result.success) {
     console.log("\n" + "─".repeat(60));
