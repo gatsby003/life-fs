@@ -4,6 +4,7 @@ import { mkdir, exists } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import readline from "readline";
+import { askAgent } from "./agents/ask";
 
 // ─────────────────────────────────────────────────────────────
 // Configuration
@@ -233,6 +234,47 @@ async function showStatus(vaultPath?: string) {
   console.log();
 }
 
+async function handleAsk(args: string[]) {
+  // Parse arguments
+  let question = "";
+  let vaultPath: string | undefined;
+  let verbose = false;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--vault" && args[i + 1]) {
+      vaultPath = args[i + 1];
+      i++;
+    } else if (args[i] === "--verbose" || args[i] === "-v") {
+      verbose = true;
+    } else if (!args[i].startsWith("-")) {
+      // Collect all non-flag arguments as the question
+      if (question) {
+        question += " " + args[i];
+      } else {
+        question = args[i];
+      }
+    }
+  }
+
+  if (!question) {
+    console.log("\n⚠️  Please provide a question to ask.");
+    console.log("Example: life ask \"What have I been focused on lately?\"\n");
+    return;
+  }
+
+  console.log(`\n🔍 Searching vault for: "${question}"\n`);
+
+  const result = await askAgent({ question, vaultPath, verbose });
+
+  if (result.success) {
+    console.log("─".repeat(60));
+    console.log("\n" + result.answer + "\n");
+  } else {
+    console.log(`\n⚠️  ${result.error}\n`);
+    process.exit(1);
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Main
 // ─────────────────────────────────────────────────────────────
@@ -246,12 +288,19 @@ Usage:
   life init [path]      Initialize a new vault (default: ~/life)
   life checkin          Capture a check-in
   life status           Show vault status
+  life ask <question>   Ask a question about your vault
   life help             Show this help
+
+Options for ask:
+  --vault <path>        Path to vault (default: ~/life)
+  --verbose, -v         Show detailed output
 
 Examples:
   life init                    # Create vault at ~/life
   life init ~/my-vault         # Create vault at custom path
   life checkin                 # Record what's on your mind
+  life ask "What have I been focused on lately?"
+  life ask "What patterns do you see?" --verbose
 `;
 
 switch (command) {
@@ -265,6 +314,10 @@ switch (command) {
   case "status":
   case "s":
     await showStatus(args[0]);
+    break;
+  case "ask":
+  case "a":
+    await handleAsk(args);
     break;
   case "help":
   case "--help":
