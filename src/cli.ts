@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/Users/ganesh/.bun/bin/bun
 
 import { mkdir, exists } from "fs/promises";
 import { join } from "path";
